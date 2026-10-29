@@ -24,63 +24,111 @@ import pe.edu.utp.clinica.model.dto.EstadoRequest;
 import pe.edu.utp.clinica.model.dto.Turno;
 import pe.edu.utp.clinica.service.CitaService;
 
+/**
+ * Controlador REST de citas médicas.
+ * <p>
+ * Atiende la consulta de disponibilidad, la reserva y cancelación de citas
+ * del paciente, y la gestión de estados desde el panel del administrador.
+ *
+ * @author Justin Najarro
+ * @version 1.1
+ */
 @RestController
 @RequestMapping("/api")
 public class CitaController {
 
+    /** Estados válidos de una cita. */
     private static final Set<String> ESTADOS = Set.of("PENDIENTE", "ATENDIDA", "CANCELADA");
 
     private final CitaService citaService;
     private final CitaDAO citaDAO;
 
+    /**
+     * Crea el controlador con sus dependencias.
+     *
+     * @param citaService reglas de negocio de las citas
+     * @param citaDAO     acceso a citas
+     */
     public CitaController(CitaService citaService, CitaDAO citaDAO) {
         this.citaService = citaService;
         this.citaDAO = citaDAO;
     }
 
-    /** Ej: GET /api/medicos/1/disponibilidad?fecha=2026-10-05 */
+    /**
+     * Turnos libres de un médico en una fecha.
+     * Endpoint: {@code GET /api/medicos/{id}/disponibilidad?fecha=AAAA-MM-DD}.
+     *
+     * @param idMedico id del médico
+     * @param fecha    fecha en formato ISO
+     * @return turnos disponibles
+     */
     @GetMapping("/medicos/{id}/disponibilidad")
     public List<Turno> disponibilidad(@PathVariable("id") int idMedico,
                                       @RequestParam("fecha") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fecha) {
         return citaService.disponibilidad(idMedico, fecha);
     }
 
+    /**
+     * Reserva una cita. Endpoint: {@code POST /api/citas}.
+     *
+     * @param req datos de la reserva
+     * @return la cita registrada con su código de confirmación
+     */
     @PostMapping("/citas")
     @ResponseStatus(HttpStatus.CREATED)
     public Cita reservar(@RequestBody CitaRequest req) {
         return citaService.reservar(req);
     }
 
+    /**
+     * Citas de un paciente. Endpoint: {@code GET /api/citas/paciente/{dni}}.
+     *
+     * @param dni DNI del paciente
+     * @return citas del paciente
+     */
     @GetMapping("/citas/paciente/{dni}")
     public List<Cita> citasDelPaciente(@PathVariable("dni") String dni) {
         return citaDAO.listarPorPaciente(dni);
     }
 
+    /**
+     * Cancela una cita del paciente. Endpoint: {@code PUT /api/citas/{id}/cancelar?dni=...}.
+     * <p>
+     * Responde 204 (sin cuerpo): el frontend vuelve a cargar la lista, así que
+     * no hace falta consultar otra vez todas las citas del paciente.
+     *
+     * @param idCita id de la cita
+     * @param dni    DNI del paciente dueño de la cita
+     * @throws ApiException 400 si no existe o ya no está pendiente
+     */
     @PutMapping("/citas/{id}/cancelar")
-    public Cita cancelar(@PathVariable("id") int idCita, @RequestParam("dni") String dni) {
-        if (!citaDAO.cancelar(idCita, dni)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "La cita no existe o ya no esta pendiente.");
-        }
-        return citaDAO.listarPorPaciente(dni).stream()
-                .filter(c -> c.idCita() == idCita)
-                .findFirst()
-                .orElse(null);
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void cancelar(@PathVariable("id") int idCita, @RequestParam("dni") String dni) {
+        Validar.exigir(citaDAO.cancelar(idCita, dni), "La cita no existe o ya no está pendiente.");
     }
 
-    /** Panel del administrador */
+    /**
+     * Todas las citas, para el panel del administrador. Endpoint: {@code GET /api/citas}.
+     *
+     * @return todas las citas
+     */
     @GetMapping("/citas")
     public List<Cita> listarTodas() {
         return citaDAO.listarTodas();
     }
 
+    /**
+     * Cambia el estado de una cita. Endpoint: {@code PUT /api/citas/{id}/estado}.
+     *
+     * @param idCita id de la cita
+     * @param req    nuevo estado
+     * @throws ApiException 400 si el estado no es válido; 404 si la cita no existe
+     */
     @PutMapping("/citas/{id}/estado")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
     public void cambiarEstado(@PathVariable("id") int idCita, @RequestBody EstadoRequest req) {
-        String estado = req.estado() == null ? "" : req.estado().toUpperCase();
-        if (!ESTADOS.contains(estado)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Estado invalido. Usa PENDIENTE, ATENDIDA o CANCELADA.");
-        }
-        if (!citaDAO.actualizarEstado(idCita, estado)) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "La cita no existe.");
-        }
+        String estado = Validar.normalizar(req.estado());
+        Validar.exigir(ESTADOS.contains(estado), "Estado inválido. Usa PENDIENTE, ATENDIDA o CANCELADA.");
+        Validar.existe(citaDAO.actualizarEstado(idCita, estado), "La cita no existe.");
     }
 }
